@@ -653,7 +653,129 @@ html, body {
 .toast.ok  { border-color: var(--success); color: var(--success); }
 .toast.err { border-color: var(--danger);  color: var(--danger);  }
 
-/* ═══════════════════ RESPONSIVE ════════════════ */
+/* ── Tool bar ─────────────────────────────── */
+.tool-bar {
+  display: flex;
+  gap: .5rem;
+  flex-wrap: wrap;
+  margin-top: .8rem;
+  padding-top: .8rem;
+  border-top: 1px solid var(--border);
+}
+
+.btn-tool {
+  background: var(--bg3);
+  border: 1px solid var(--border);
+  color: var(--text-dim);
+  padding: .38rem .9rem;
+  border-radius: var(--radius);
+  font-size: .82rem;
+  cursor: pointer;
+  transition: background var(--transition), color var(--transition), border-color var(--transition);
+}
+.btn-tool:hover { background: var(--border); color: var(--text); border-color: var(--accent); }
+
+.lampyre-label { cursor: pointer; }
+
+/* Settings section header */
+.settings-section {
+  font-size: .72rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: .08em;
+  color: var(--accent);
+  padding-bottom: .3rem;
+  border-bottom: 1px solid var(--border);
+}
+
+/* Breach count in stat bar */
+.breach-val { color: var(--danger) !important; }
+
+/* ── HIBP Breach cards ────────────────────── */
+.breach-grid {
+  display: flex;
+  flex-direction: column;
+  gap: .7rem;
+}
+
+.breach-card {
+  background: var(--bg2);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--danger);
+  border-radius: var(--radius);
+  padding: .8rem 1rem;
+}
+.breach-card.paste-card { border-left-color: var(--warn); }
+
+.breach-name {
+  font-weight: 700;
+  font-size: .9rem;
+  color: var(--text);
+  margin-bottom: .35rem;
+}
+.breach-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: .4rem .8rem;
+  margin-bottom: .4rem;
+}
+.breach-badge {
+  font-size: .72rem;
+  background: rgba(224,82,82,.12);
+  border: 1px solid rgba(224,82,82,.3);
+  color: var(--danger);
+  padding: 1px 7px;
+  border-radius: 4px;
+}
+.breach-badge.warn { background: rgba(245,166,35,.1); border-color: rgba(245,166,35,.3); color: var(--warn); }
+.breach-classes {
+  font-size: .78rem;
+  color: var(--text-dim);
+}
+.breach-classes span {
+  display: inline-block;
+  background: var(--bg3);
+  border: 1px solid var(--border);
+  padding: 1px 6px;
+  border-radius: 3px;
+  margin: 2px 2px 0 0;
+  font-size: .71rem;
+}
+
+/* ── Lampyre table ────────────────────────── */
+.lampyre-table-wrap {
+  overflow-x: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+.lampyre-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: .8rem;
+}
+.lampyre-table th {
+  background: var(--bg3);
+  color: var(--accent);
+  text-align: left;
+  padding: .55rem .8rem;
+  font-weight: 600;
+  font-size: .72rem;
+  text-transform: uppercase;
+  letter-spacing: .05em;
+  border-bottom: 1px solid var(--border);
+  white-space: nowrap;
+}
+.lampyre-table td {
+  padding: .45rem .8rem;
+  border-bottom: 1px solid var(--border);
+  color: var(--text);
+  max-width: 200px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.lampyre-table tr:hover td { background: var(--bg2); }
+.lampyre-table tr:last-child td { border-bottom: none; }
 @media (max-width: 768px) {
   .sidebar { display: none; }
   .content { padding: 1rem; }
