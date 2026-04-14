@@ -677,6 +677,29 @@ html, body {
 
 .lampyre-label { cursor: pointer; }
 
+/* Maltego server box */
+.maltego-server-box {
+  background: var(--bg0);
+  border: 1px solid var(--accent);
+  border-radius: var(--radius);
+  padding: .8rem 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: .4rem;
+}
+.msb-label { font-size: .75rem; color: var(--text-dim); }
+.msb-url {
+  font-family: monospace;
+  font-size: .88rem;
+  color: var(--accent);
+  background: var(--bg2);
+  padding: .4rem .7rem;
+  border-radius: 4px;
+  border: 1px solid var(--border);
+  word-break: break-all;
+}
+.msb-hint { font-size: .72rem; color: var(--text-muted); }
+
 /* Settings section header */
 .settings-section {
   font-size: .72rem;

@@ -60,6 +60,14 @@ $("settingsToggle").addEventListener("click", () => {
 });
 $("settingsClose").addEventListener("click", () => $("settingsPanel").classList.add("hidden"));
 
+// Auto-fill Maltego server URL with actual host
+$("maltegoServerUrl").textContent = `http://${location.host}/maltego`;
+$("copyMaltegoUrl").addEventListener("click", () => {
+  navigator.clipboard.writeText($("maltegoServerUrl").textContent)
+    .then(() => toast("Maltego URL copied!", "ok"))
+    .catch(() => toast("Copy manually: " + $("maltegoServerUrl").textContent));
+});
+
 $("saveConfig").addEventListener("click", async () => {
   const btn = $("saveConfig"), msg = $("cfgMsg");
   const api_key     = $("cfgApiKey").value.trim();

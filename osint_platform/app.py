@@ -14,6 +14,7 @@ import math
 import os
 import subprocess
 import time
+import xml.etree.ElementTree as ET
 import zipfile
 from datetime import datetime
 from pathlib import Path
@@ -471,6 +472,231 @@ def _report_meta(p: Path) -> dict | None:
         }
     except Exception:
         return None
+
+
+# ═══════════════════════════════════════════════
+# Maltego Transform Server (iTDS)
+# ═══════════════════════════════════════════════
+
+def _parse_maltego_req(body: bytes) -> str:
+    """Extract entity value from Maltego transform request XML."""
+    try:
+        root = ET.fromstring(body)
+        for e in root.iter("Entity"):
+            v = e.findtext("Value")
+            if v: return v.strip()
+    except Exception as ex:
+        log.error("Maltego XML parse: %s", ex)
+    return ""
+
+
+def _maltego_resp(entity_blocks: list[str], info: str = "") -> Response:
+    """Wrap entity XML list in a MaltegoTransformResponseMessage."""
+    inner = "\n".join(entity_blocks)
+    ui    = f'<UIMessage MessageType="Inform">{_esc(info)}</UIMessage>' if info else ""
+    xml   = f"""<?xml version="1.0" encoding="UTF-8"?>
+<MaltegoMessage>
+  <MaltegoTransformResponseMessage>
+    <Entities>
+{inner}
+    </Entities>
+    <UIMessages>{ui}</UIMessages>
+  </MaltegoTransformResponseMessage>
+</MaltegoMessage>"""
+    return Response(xml, mimetype="text/xml")
+
+
+def _maltego_err(msg: str) -> Response:
+    xml = f"""<?xml version="1.0" encoding="UTF-8"?>
+<MaltegoMessage>
+  <MaltegoTransformResponseMessage>
+    <Entities/>
+    <UIMessages>
+      <UIMessage MessageType="FatalError">{_esc(msg)}</UIMessage>
+    </UIMessages>
+  </MaltegoTransformResponseMessage>
+</MaltegoMessage>"""
+    return Response(xml, mimetype="text/xml")
+
+
+@app.route("/maltego")
+def maltego_seed():
+    """Maltego TDS seed — add this URL once in Maltego to get all transforms."""
+    host = request.host   # e.g. 127.0.0.1:5000
+    xml  = f"""<?xml version="1.0" encoding="UTF-8"?>
+<MaltegoServer name="OSINT Platform" url="http://{host}"
+               description="OSINT Industries + HIBP live transforms"
+               uuid="osint-platform-local-v2">
+  <LastSync>{datetime.now().strftime('%Y-%m-%dT%H:%M:%S')}</LastSync>
+  <Protocol version="0.0"/>
+  <Transforms>
+
+    <Transform name="osint.EmailLookup"
+               displayName="[OSINT] Email → Registered Platforms">
+      <Description>Query OSINT Industries for every platform linked to this email (accounts, phone hints)</Description>
+      <Author>OSINT Platform</Author><Version>1.0</Version>
+      <Deprecated>false</Deprecated>
+      <TransformSpec>
+        <URL>http://{host}/maltego/email_lookup</URL>
+        <InputEntity>maltego.EmailAddress</InputEntity>
+      </TransformSpec>
+    </Transform>
+
+    <Transform name="osint.HIBPCheck"
+               displayName="[OSINT] Email → HIBP Breaches">
+      <Description>Check Have I Been Pwned for data breaches linked to this email</Description>
+      <Author>OSINT Platform</Author><Version>1.0</Version>
+      <Deprecated>false</Deprecated>
+      <TransformSpec>
+        <URL>http://{host}/maltego/hibp_check</URL>
+        <InputEntity>maltego.EmailAddress</InputEntity>
+      </TransformSpec>
+    </Transform>
+
+    <Transform name="osint.PhoneLookup"
+               displayName="[OSINT] Phone → Registered Platforms">
+      <Description>Query OSINT Industries for platforms linked to this phone number</Description>
+      <Author>OSINT Platform</Author><Version>1.0</Version>
+      <Deprecated>false</Deprecated>
+      <TransformSpec>
+        <URL>http://{host}/maltego/phone_lookup</URL>
+        <InputEntity>maltego.PhoneNumber</InputEntity>
+      </TransformSpec>
+    </Transform>
+
+    <Transform name="osint.UsernameLookup"
+               displayName="[OSINT] Username → Registered Platforms">
+      <Description>Query OSINT Industries for platforms using this username</Description>
+      <Author>OSINT Platform</Author><Version>1.0</Version>
+      <Deprecated>false</Deprecated>
+      <TransformSpec>
+        <URL>http://{host}/maltego/username_lookup</URL>
+        <InputEntity>maltego.Alias</InputEntity>
+      </TransformSpec>
+    </Transform>
+
+  </Transforms>
+</MaltegoServer>"""
+    return Response(xml, mimetype="text/xml")
+
+
+def _osint_to_maltego_entities(modules: list) -> list[str]:
+    """Convert OSINT Industries module list to Maltego entity XML blocks."""
+    out = []
+    for mod in modules:
+        if mod.get("status") != "found":
+            continue
+        name = mod.get("module", "unknown")
+        cat  = (mod.get("category") or {}).get("name", "")
+        sf   = ((mod.get("spec_format") or [{}])[0])
+        ph   = (sf.get("phone_hint") or {}).get("value", "")
+
+        out.append(f"""      <Entity Type="maltego.Website">
+        <Value>{_esc(name + ".com")}</Value>
+        <AdditionalFields>
+          <Field Name="fqdn"       DisplayName="Domain"     MatchingRule="strict">{_esc(name + ".com")}</Field>
+          <Field Name="platform"   DisplayName="Platform"   MatchingRule="loose">{_esc(name.capitalize())}</Field>
+          <Field Name="category"   DisplayName="Category"   MatchingRule="loose">{_esc(cat)}</Field>
+          <Field Name="phone_hint" DisplayName="Phone Hint" MatchingRule="loose">{_esc(ph)}</Field>
+        </AdditionalFields>
+      </Entity>""")
+
+        if ph:
+            out.append(f"""      <Entity Type="maltego.PhoneNumber">
+        <Value>{_esc(ph)}</Value>
+        <AdditionalFields>
+          <Field Name="phonenumber" DisplayName="Phone Number" MatchingRule="strict">{_esc(ph)}</Field>
+          <Field Name="source"      DisplayName="Found via"    MatchingRule="loose">{_esc(name.capitalize())}</Field>
+        </AdditionalFields>
+      </Entity>""")
+    return out
+
+
+@app.route("/maltego/email_lookup", methods=["POST"])
+def maltego_email_lookup():
+    cfg = load_config()
+    if not cfg.get("api_key"):
+        return _maltego_err("OSINT API key not set. Open http://127.0.0.1:5000 → Settings.")
+    email = _parse_maltego_req(request.data)
+    if not email:
+        return _maltego_err("No email entity received.")
+    result  = OSINTClient(cfg["api_key"], cfg["base_url"],
+                          cfg.get("auth_header", "api-key")).search(email, "email")
+    if not result.get("success"):
+        return _maltego_err(result.get("error", "Search failed."))
+    modules = result.get("data", []) if isinstance(result.get("data"), list) else []
+    found   = [m for m in modules if m.get("status") == "found"]
+    ents    = _osint_to_maltego_entities(modules)
+    log.info("Maltego email_lookup %s → %d found", email, len(found))
+    return _maltego_resp(ents, f"{len(found)}/{len(modules)} platforms found for {email}")
+
+
+@app.route("/maltego/phone_lookup", methods=["POST"])
+def maltego_phone_lookup():
+    cfg = load_config()
+    if not cfg.get("api_key"):
+        return _maltego_err("OSINT API key not set.")
+    phone = _parse_maltego_req(request.data)
+    if not phone:
+        return _maltego_err("No phone entity received.")
+    result  = OSINTClient(cfg["api_key"], cfg["base_url"],
+                          cfg.get("auth_header", "api-key")).search(phone, "phone")
+    if not result.get("success"):
+        return _maltego_err(result.get("error", "Search failed."))
+    modules = result.get("data", []) if isinstance(result.get("data"), list) else []
+    ents    = _osint_to_maltego_entities(modules)
+    found   = len([m for m in modules if m.get("status") == "found"])
+    return _maltego_resp(ents, f"{found}/{len(modules)} platforms found for {phone}")
+
+
+@app.route("/maltego/username_lookup", methods=["POST"])
+def maltego_username_lookup():
+    cfg = load_config()
+    if not cfg.get("api_key"):
+        return _maltego_err("OSINT API key not set.")
+    username = _parse_maltego_req(request.data)
+    if not username:
+        return _maltego_err("No username entity received.")
+    result  = OSINTClient(cfg["api_key"], cfg["base_url"],
+                          cfg.get("auth_header", "api-key")).search(username, "username")
+    if not result.get("success"):
+        return _maltego_err(result.get("error", "Search failed."))
+    modules = result.get("data", []) if isinstance(result.get("data"), list) else []
+    ents    = _osint_to_maltego_entities(modules)
+    found   = len([m for m in modules if m.get("status") == "found"])
+    return _maltego_resp(ents, f"{found}/{len(modules)} platforms found for {username}")
+
+
+@app.route("/maltego/hibp_check", methods=["POST"])
+def maltego_hibp_check():
+    cfg      = load_config()
+    hibp_key = cfg.get("hibp_key", "")
+    if not hibp_key:
+        return _maltego_err("HIBP API key not set. Open http://127.0.0.1:5000 → Settings.")
+    email = _parse_maltego_req(request.data)
+    if not email:
+        return _maltego_err("No email entity received.")
+    result   = HIBPClient(hibp_key).breaches(email)
+    breaches = result.get("data", [])
+    ents = []
+    for b in breaches:
+        domain  = b.get("Domain", "") or b.get("Name", "").lower() + ".com"
+        bname   = b.get("Name", "Unknown")
+        date    = b.get("BreachDate", "")
+        count   = b.get("PwnCount", 0)
+        classes = ", ".join(b.get("DataClasses", [])[:5])
+        ents.append(f"""      <Entity Type="maltego.DNSName">
+        <Value>{_esc(domain)}</Value>
+        <AdditionalFields>
+          <Field Name="fqdn"        DisplayName="Domain"          MatchingRule="strict">{_esc(domain)}</Field>
+          <Field Name="breach_name" DisplayName="Breach Name"     MatchingRule="loose">{_esc(bname)}</Field>
+          <Field Name="breach_date" DisplayName="Breach Date"     MatchingRule="loose">{_esc(date)}</Field>
+          <Field Name="records"     DisplayName="Records Exposed" MatchingRule="loose">{_esc(str(count))}</Field>
+          <Field Name="data_types"  DisplayName="Data Types"      MatchingRule="loose">{_esc(classes)}</Field>
+        </AdditionalFields>
+      </Entity>""")
+    log.info("Maltego hibp_check %s → %d breaches", email, len(breaches))
+    return _maltego_resp(ents, f"{len(breaches)} breaches found for {email}")
 
 
 # ═══════════════════════════════════════════════
