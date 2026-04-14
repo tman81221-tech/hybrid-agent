@@ -10,9 +10,11 @@ import io
 import json
 import logging
 import hashlib
+import math
 import os
 import subprocess
 import time
+import zipfile
 from datetime import datetime
 from pathlib import Path
 
@@ -222,87 +224,129 @@ def parse_lampyre(content: str, ext: str) -> list:
 
 
 # ═══════════════════════════════════════════════
-# Maltego XML Export
+# Maltego .mtgx Graph Export
 # ═══════════════════════════════════════════════
 def _esc(s) -> str:
     return _html.escape(str(s))
 
 
-def to_maltego_xml(query: str, query_type: str,
-                   osint_modules: list, hibp_breaches: list) -> str:
-    """Build Maltego-compatible entity XML for desktop import."""
+def _circle(index: int, total: int, cx: int, cy: int, r: int) -> tuple[int, int]:
+    """Return (x, y) for evenly-spaced position on a circle."""
+    angle = 2 * math.pi * index / max(total, 1) - math.pi / 2
+    return int(cx + r * math.cos(angle)), int(cy + r * math.sin(angle))
 
-    entities = []
 
-    # ── Target entity ──────────────────────────────────────────
+def to_maltego_mtgx(query: str, query_type: str,
+                    osint_modules: list, hibp_breaches: list) -> bytes:
+    """
+    Build a proper Maltego .mtgx graph file (ZIP containing Graphs/graph.xml).
+    Layout: target at centre → OSINT platforms inner ring → HIBP breaches outer ring.
+    """
+
+    # ── Entity & link containers ──────────────────────────────
+    entity_xmls = []
+    link_xmls   = []
+    eid         = 0      # entity id counter
+    lid         = 0      # link id counter
+    CX, CY      = 480, 360   # canvas centre
+
+    def add_entity(etype: str, value: str, fields: dict,
+                   x: int, y: int, color: str = "#4f9eff") -> int:
+        nonlocal eid
+        eid += 1
+        fxml = "\n          ".join(
+            f'<field displayName="{_esc(k)}" matchingRule="loose" name="{_esc(k.lower().replace(" ","_"))}">'
+            f'{_esc(v)}</field>'
+            for k, v in fields.items() if v
+        )
+        entity_xmls.append(f"""      <entity id="{eid}" type="{_esc(etype)}" x="{x}" y="{y}">
+        <value>{_esc(value)}</value>
+        <weight>100</weight>
+        <additionalFields>
+          {fxml}
+        </additionalFields>
+        <entityIcon><color>{color}</color></entityIcon>
+      </entity>""")
+        return eid
+
+    def add_link(from_id: int, to_id: int, label: str) -> None:
+        nonlocal lid
+        lid += 1
+        link_xmls.append(f"""      <link id="{lid}" from="{from_id}" to="{to_id}" label="{_esc(label)}">
+        <weight>100</weight>
+        <additionalFields/>
+      </link>""")
+
+    # ── 1. Target (centre) ────────────────────────────────────
     if query_type == "email":
-        entities.append(f"""<Entity Type="maltego.EmailAddress">
-  <Value>{_esc(query)}</Value>
-  <AdditionalFields>
-    <Field Name="email" DisplayName="E-mail" MatchingRule="strict">{_esc(query)}</Field>
-  </AdditionalFields>
-</Entity>""")
+        t_id = add_entity("maltego.EmailAddress", query,
+                           {"Email Address": query}, CX, CY, "#0091cd")
     elif query_type == "phone":
-        entities.append(f"""<Entity Type="maltego.PhoneNumber">
-  <Value>{_esc(query)}</Value>
-  <AdditionalFields>
-    <Field Name="phonenumber" DisplayName="Phone" MatchingRule="strict">{_esc(query)}</Field>
-  </AdditionalFields>
-</Entity>""")
+        t_id = add_entity("maltego.PhoneNumber", query,
+                           {"Phone Number": query}, CX, CY, "#e07b39")
     else:
-        entities.append(f"""<Entity Type="maltego.Alias">
-  <Value>{_esc(query)}</Value>
-</Entity>""")
+        t_id = add_entity("maltego.Alias", query,
+                           {"Alias": query}, CX, CY, "#7b5ea7")
 
-    # ── Found OSINT Industries platforms ───────────────────────
-    for mod in osint_modules:
-        if mod.get("status") != "found":
-            continue
-        name = mod.get("module", "unknown")
-        cat  = (mod.get("category") or {}).get("name", "")
-        # Extract phone hints
-        sf      = ((mod.get("spec_format") or [{}])[0])
-        ph      = (sf.get("phone_hint") or {}).get("value", "")
-        entities.append(f"""<Entity Type="maltego.Website">
-  <Value>{_esc(name + ".com")}</Value>
-  <AdditionalFields>
-    <Field Name="fqdn"     DisplayName="Platform"  MatchingRule="strict">{_esc(name + ".com")}</Field>
-    <Field Name="platform" DisplayName="Service"   MatchingRule="loose">{_esc(name.capitalize())}</Field>
-    <Field Name="category" DisplayName="Category"  MatchingRule="loose">{_esc(cat)}</Field>
-    <Field Name="phone"    DisplayName="PhoneHint" MatchingRule="loose">{_esc(ph)}</Field>
-    <Field Name="status"   DisplayName="Status"    MatchingRule="loose">Registered</Field>
-  </AdditionalFields>
-</Entity>""")
+    # ── 2. OSINT Industries platforms (inner ring, r=220) ─────
+    found_mods = [m for m in osint_modules if m.get("status") == "found"]
+    for i, mod in enumerate(found_mods):
+        name  = mod.get("module", "unknown")
+        cat   = (mod.get("category") or {}).get("name", "")
+        sf    = ((mod.get("spec_format") or [{}])[0])
+        ph    = (sf.get("phone_hint") or {}).get("value", "")
+        x, y  = _circle(i, len(found_mods), CX, CY, 220)
+        mid   = add_entity(
+            "maltego.Website",
+            f"{name}.com",
+            {"Platform": name.capitalize(), "Category": cat, "Phone Hint": ph, "Status": "Registered"},
+            x, y, "#3ecf8e",
+        )
+        add_link(t_id, mid, "registered on")
 
-    # ── HIBP breaches ──────────────────────────────────────────
-    for b in hibp_breaches:
+        # Phone hint as separate PhoneNumber entity (offset slightly)
+        if ph:
+            px, py = x + 80, y - 60
+            pid = add_entity("maltego.PhoneNumber", ph,
+                             {"Phone Number": ph, "Source": name.capitalize()},
+                             px, py, "#e07b39")
+            add_link(mid, pid, "phone hint")
+
+    # ── 3. HIBP breaches (outer ring, r=400) ─────────────────
+    for i, b in enumerate(hibp_breaches):
         bname   = b.get("Name", "Unknown")
-        domain  = b.get("Domain", "")
+        domain  = b.get("Domain", "") or f"{bname.lower()}.com"
         date    = b.get("BreachDate", "")
-        count   = b.get("PwnCount", 0)
-        classes = ", ".join(b.get("DataClasses", []))
-        entities.append(f"""<Entity Type="maltego.DNSName">
-  <Value>{_esc(domain or bname)}</Value>
-  <AdditionalFields>
-    <Field Name="fqdn"        DisplayName="Domain"    MatchingRule="strict">{_esc(domain)}</Field>
-    <Field Name="breach_name" DisplayName="Breach"    MatchingRule="loose">{_esc(bname)}</Field>
-    <Field Name="date"        DisplayName="Date"      MatchingRule="loose">{_esc(date)}</Field>
-    <Field Name="records"     DisplayName="Records"   MatchingRule="loose">{_esc(str(count))}</Field>
-    <Field Name="data_types"  DisplayName="DataTypes" MatchingRule="loose">{_esc(classes)}</Field>
-  </AdditionalFields>
-</Entity>""")
+        count   = str(b.get("PwnCount", 0))
+        classes = ", ".join(b.get("DataClasses", [])[:5])
+        x, y    = _circle(i, len(hibp_breaches), CX, CY, 400)
+        bid     = add_entity(
+            "maltego.DNSName",
+            domain,
+            {"Breach Name": bname, "Breach Date": date,
+             "Records Exposed": count, "Data Types": classes},
+            x, y, "#e05252",
+        )
+        add_link(t_id, bid, f"breached ({date})")
 
-    inner = "\n    ".join(
-        "\n    ".join(e.splitlines()) for e in entities
-    )
-    return f"""<?xml version="1.0" encoding="UTF-8"?>
-<MaltegoMessage>
-  <MaltegoTransformResponseMessage>
-    <Entities>
-    {inner}
-    </Entities>
-  </MaltegoTransformResponseMessage>
-</MaltegoMessage>"""
+    # ── Assemble graph.xml ────────────────────────────────────
+    graph_xml = f"""<?xml version="1.0" encoding="utf-8"?>
+<MaltegoGraph version="1.2">
+  <graph edgeStyle="curved" entityNamespace="maltego" imageStyle="round">
+    <entities>
+{chr(10).join(entity_xmls)}
+    </entities>
+    <links>
+{chr(10).join(link_xmls)}
+    </links>
+  </graph>
+</MaltegoGraph>"""
+
+    # ── Pack into .mtgx (ZIP) ─────────────────────────────────
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr("Graphs/graph.xml", graph_xml.encode("utf-8"))
+    return buf.getvalue()
 
 
 # ═══════════════════════════════════════════════
@@ -546,7 +590,7 @@ def api_hibp():
     })
 
 
-# ── Maltego XML Export ──────────────────────────
+# ── Maltego .mtgx Export ────────────────────────
 @app.route("/api/export/maltego", methods=["POST"])
 def api_export_maltego():
     body          = request.get_json(silent=True) or {}
@@ -558,12 +602,14 @@ def api_export_maltego():
     if not query:
         return jsonify({"success": False, "error": "Query required."}), 400
 
-    xml = to_maltego_xml(query, query_type, osint_modules, hibp_breaches)
-    safe_q = "".join(c for c in query if c.isalnum() or c in "._-")[:30]
+    mtgx_bytes = to_maltego_mtgx(query, query_type, osint_modules, hibp_breaches)
+    safe_q     = "".join(c for c in query if c.isalnum() or c in "._-")[:30]
+    log.info("Maltego export: query=%s modules=%d breaches=%d",
+             query, len(osint_modules), len(hibp_breaches))
     return Response(
-        xml,
-        mimetype="text/xml",
-        headers={"Content-Disposition": f'attachment; filename="maltego_{safe_q}.xml"'},
+        mtgx_bytes,
+        mimetype="application/zip",
+        headers={"Content-Disposition": f'attachment; filename="maltego_{safe_q}.mtgx"'},
     )
 
 

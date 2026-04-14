@@ -409,7 +409,7 @@ async function exportMaltego() {
     const url  = URL.createObjectURL(blob);
     const a    = document.createElement("a");
     a.href     = url;
-    a.download = `maltego_${_lastQuery.substring(0,20)}.xml`;
+    a.download = `maltego_${_lastQuery.substring(0,20)}.mtgx`;
     a.click();
     URL.revokeObjectURL(url);
     toast("Maltego XML downloaded.", "ok");
