@@ -218,33 +218,51 @@ def _best_model() -> str | None:
         return None
 
 
-def ai_analyze(query: str, query_type: str, data: dict) -> str:
+def ai_analyze(query: str, query_type: str, data) -> str:
     """Generate a structured OSINT analysis report via a local LLM."""
     model = _best_model()
     if not model:
         return "AI analysis unavailable – no Ollama model found. Run: ollama pull llama3"
 
-    # Limit payload to avoid context overflow
-    compact = json.dumps(data, ensure_ascii=False, default=str)[:4500]
+    # data is a list of module dicts from OSINT Industries
+    modules = data if isinstance(data, list) else []
+    found   = [m for m in modules if m.get("status") == "found"]
+
+    # Build a compact human-readable summary for the prompt
+    summary_lines = []
+    for m in found:
+        name = m.get("module", "unknown").capitalize()
+        sf   = (m.get("spec_format") or [{}])[0]
+        details = []
+        for k, v in sf.items():
+            if k == "platform_variables":
+                for pv in (v or []):
+                    if pv.get("value") not in (None, False):
+                        details.append(f"{pv.get('proper_key', k)}: {pv['value']}")
+            elif isinstance(v, dict) and "value" in v and v["value"] not in (None, False):
+                details.append(f"{v.get('proper_key', k)}: {v['value']}")
+        summary_lines.append(f"- {name}: " + (", ".join(details) if details else "registered"))
+
+    compact = "\n".join(summary_lines) if summary_lines else json.dumps(data, default=str)[:3000]
 
     prompt = f"""You are an expert OSINT analyst. Analyze the following data and write a clear, structured report.
 
 Target  : {query}
 Type    : {query_type}
+Found on: {len(found)} of {len(modules)} platforms checked
 
-=== RAW DATA ===
+=== FINDINGS ===
 {compact}
-=== END DATA ===
+=== END ===
 
-Your report must include:
-1. **Executive Summary** – one paragraph
-2. **Digital Footprint** – platforms, accounts, and services detected
-3. **Breach & Leak Exposure** – any credential or data leaks
-4. **Key Personal Details** – names, locations, dates found (if any)
-5. **Risk Assessment** – LOW / MEDIUM / HIGH, with reasons
-6. **Recommended Actions** – for a security / investigative context
+Write a professional OSINT report with these sections:
+1. Executive Summary
+2. Digital Footprint (list each platform found)
+3. Phone Numbers / Hints detected
+4. Risk Assessment (LOW / MEDIUM / HIGH with reasons)
+5. Recommended Actions
 
-Be concise, factual, and professional."""
+Be concise and factual."""
 
     try:
         result = subprocess.run(

@@ -224,137 +224,116 @@ function showError(msg) {
 // Render results
 // ─────────────────────────────────────────────
 function renderResults(d, query, type) {
-  // stat bar
   $("rQuery").textContent   = query;
   $("rType").textContent    = type;
   $("rElapsed").textContent = d.elapsed ? `${d.elapsed}s` : "–";
 
-  const data     = d.data || {};
-  const modules  = Array.isArray(data.modules) ? data.modules : [];
-  const found    = modules.filter(m => m.found !== false && hasContent(m)).length;
+  // OSINT Industries returns raw_data as a direct array of module objects
+  const modules = Array.isArray(d.data) ? d.data : [];
+  const found   = modules.filter(m => m.status === "found").length;
   $("rServices").textContent = modules.length ? `${found} / ${modules.length}` : "–";
 
-  // raw JSON
-  $("rawJson").textContent = JSON.stringify(data, null, 2);
+  $("rawJson").textContent = JSON.stringify(d.data, null, 2);
 
-  // AI analysis
   const aiEl = $("aiOutput");
   if (d.ai_analysis && d.ai_analysis.trim()) {
-    aiEl.innerHTML = "";
     aiEl.textContent = d.ai_analysis;
   } else if (!$("useAI").checked) {
-    aiEl.innerHTML = `<div class="ai-placeholder">AI was disabled for this search. Enable the toggle and search again.</div>`;
+    aiEl.innerHTML = `<div class="ai-placeholder">AI was disabled for this search.</div>`;
   } else {
     aiEl.innerHTML = `<div class="ai-placeholder">No AI analysis available (Ollama may be offline).</div>`;
   }
 
-  // summary + modules
-  renderSummary(data);
+  renderSummary(modules, query);
   renderModules(modules);
 
   $("results").classList.remove("hidden");
-
-  // switch to summary tab
   activateTab(document.querySelector('.tabs .tab[data-tab="summary"]'));
 }
 
-function hasContent(module) {
-  if (!module) return false;
-  const skip = ["name", "found", "error"];
-  return Object.keys(module).some(k => !skip.includes(k) && module[k] !== null && module[k] !== "");
+// ── Helpers for OSINT Industries module structure ──────────────
+
+function capitalize(str) {
+  if (!str) return "";
+  return str.charAt(0).toUpperCase() + str.slice(1);
 }
 
-function renderSummary(data) {
+/**
+ * Extract key/value pairs from a module's spec_format array.
+ * spec_format: [ { registered: {proper_key, value}, phone_hint: {...}, platform_variables: [...] } ]
+ */
+function extractSpecDetails(mod) {
+  const sf = (mod.spec_format && mod.spec_format[0]) ? mod.spec_format[0] : {};
+  const results = [];
+  for (const [key, val] of Object.entries(sf)) {
+    if (key === "platform_variables") {
+      for (const pv of (Array.isArray(val) ? val : [])) {
+        if (pv.value !== null && pv.value !== undefined && pv.value !== false)
+          results.push({ key: pv.proper_key || pv.key, value: pv.value });
+      }
+    } else if (val && typeof val === "object" && "value" in val) {
+      if (val.value !== null && val.value !== undefined)
+        results.push({ key: val.proper_key || key, value: val.value });
+    }
+  }
+  return results;
+}
+
+function renderSummary(modules, query) {
   const grid = $("summaryGrid");
   grid.innerHTML = "";
 
-  // Profile-level fields
-  const topFields = {
-    "Email":    data.query || data.email || "",
-    "Name":     data.name  || extractName(data),
-    "Country":  data.country || extractCountry(data),
-    "Phone":    data.phone  || "",
-    "Breaches": countBreaches(data),
-    "Platforms": countPlatforms(data),
-  };
+  const foundMods = modules.filter(m => m.status === "found");
 
-  for (const [label, value] of Object.entries(topFields)) {
-    if (!value && value !== 0) continue;
+  // ── Top stat cards ──
+  const topStats = [
+    { label: "Query",          value: query },
+    { label: "Platforms Found", value: String(foundMods.length) },
+    { label: "Total Checked",  value: String(modules.length) },
+  ];
+
+  // Collect unique phone hints across all found modules
+  const phones = [];
+  for (const mod of foundMods) {
+    const sf = (mod.spec_format && mod.spec_format[0]) || {};
+    if (sf.phone_hint && sf.phone_hint.value)
+      phones.push(sf.phone_hint.value);
+  }
+  if (phones.length)
+    topStats.push({ label: "Phone Hints", value: [...new Set(phones)].join(" / ") });
+
+  for (const s of topStats) {
     const card = document.createElement("div");
     card.className = "summary-card";
-    card.innerHTML = `<div class="sc-platform">${escHtml(label)}</div>
-                      <div class="sc-value">${escHtml(String(value))}</div>`;
+    card.innerHTML = `<div class="sc-platform">${escHtml(s.label)}</div>
+                      <div class="sc-value">${escHtml(s.value)}</div>`;
     grid.appendChild(card);
   }
 
-  // Per-module cards (one per found service)
-  const modules = Array.isArray(data.modules) ? data.modules : [];
-  for (const mod of modules) {
-    if (!hasContent(mod) || mod.found === false) continue;
-    const card = document.createElement("div");
+  // ── One card per found platform ──
+  for (const mod of foundMods) {
+    const card  = document.createElement("div");
     card.className = "summary-card";
-    const name = mod.name || "Unknown";
-    const detail = extractModuleDetail(mod);
-    card.innerHTML = `<div class="sc-platform">${escHtml(name)}</div>
-                      <div class="sc-value">${escHtml(detail.value)}</div>
-                      ${detail.label ? `<div class="sc-label">${escHtml(detail.label)}</div>` : ""}`;
+    const name  = capitalize(mod.module || "Unknown");
+    const cat   = (mod.category && mod.category.name) ? mod.category.name : "";
+    const details = extractSpecDetails(mod);
+    // Show the most interesting detail (skip plain "Registered: true")
+    const detail  = details.find(d => d.key !== "Registered" && d.value !== true) || details[0];
+
+    card.innerHTML = `
+      <div class="sc-platform">${escHtml(name)}</div>
+      ${detail
+        ? `<div class="sc-value">${escHtml(String(detail.value))}</div>
+           <div class="sc-label">${escHtml(detail.key)}</div>`
+        : `<div class="sc-value" style="color:var(--success)">✓ Registered</div>`}
+      ${cat ? `<div class="sc-label" style="margin-top:5px;opacity:.55">${escHtml(cat)}</div>` : ""}`;
     grid.appendChild(card);
   }
 
-  if (grid.childElementCount === 0) {
-    grid.innerHTML = `<p style="color:var(--text-muted);padding:.5rem">No structured data to display. Check the Raw JSON tab.</p>`;
+  if (foundMods.length === 0) {
+    grid.innerHTML = `<p style="color:var(--text-muted);padding:.5rem 0">
+      No platforms found for this query. Check the Modules tab for full details.</p>`;
   }
-}
-
-function extractName(data) {
-  if (!data) return "";
-  if (data.full_name)  return data.full_name;
-  if (data.first_name) return `${data.first_name || ""} ${data.last_name || ""}`.trim();
-  const mods = Array.isArray(data.modules) ? data.modules : [];
-  for (const m of mods) {
-    if (m.name && m.full_name) return m.full_name;
-    if (m.display_name)        return m.display_name;
-  }
-  return "";
-}
-
-function extractCountry(data) {
-  if (!data) return "";
-  if (data.country) return data.country;
-  const mods = Array.isArray(data.modules) ? data.modules : [];
-  for (const m of mods) if (m.country) return m.country;
-  return "";
-}
-
-function countBreaches(data) {
-  if (!data) return 0;
-  if (typeof data.breach_count === "number") return data.breach_count;
-  if (Array.isArray(data.breaches)) return data.breaches.length;
-  const mods = Array.isArray(data.modules) ? data.modules : [];
-  const b = mods.filter(m => (m.name || "").toLowerCase().includes("breach") || (m.name || "").toLowerCase().includes("hibp") || (m.name || "").toLowerCase().includes("leak"));
-  return b.filter(hasContent).length || "";
-}
-
-function countPlatforms(data) {
-  if (!data) return 0;
-  const mods = Array.isArray(data.modules) ? data.modules : [];
-  return mods.filter(hasContent).length || "";
-}
-
-function extractModuleDetail(mod) {
-  const skip = new Set(["name", "found", "error", "module", "id"]);
-  // Prefer human-readable fields
-  const prefer = ["username", "email", "display_name", "full_name", "url", "profile_url", "bio", "location", "city"];
-  for (const k of prefer) {
-    if (mod[k] && typeof mod[k] === "string") return { value: mod[k], label: k };
-  }
-  // Fall back to first non-skip string field
-  for (const [k, v] of Object.entries(mod)) {
-    if (skip.has(k)) continue;
-    if (typeof v === "string" && v.length > 0 && v.length < 120) return { value: v, label: k };
-    if (typeof v === "number") return { value: String(v), label: k };
-  }
-  return { value: "Found", label: "" };
 }
 
 function renderModules(modules) {
@@ -366,42 +345,58 @@ function renderModules(modules) {
     return;
   }
 
-  // Sort: found first
+  // Found first, then alphabetical within each group
   const sorted = [...modules].sort((a, b) => {
-    const aHas = hasContent(a) ? 0 : 1;
-    const bHas = hasContent(b) ? 0 : 1;
-    return aHas - bHas;
+    const af = a.status === "found" ? 0 : 1;
+    const bf = b.status === "found" ? 0 : 1;
+    if (af !== bf) return af - bf;
+    return (a.module || "").localeCompare(b.module || "");
   });
 
   for (const mod of sorted) {
-    const name   = mod.name || "Unknown";
-    const found  = hasContent(mod);
-    const item   = document.createElement("div");
+    const name  = capitalize(mod.module || "Unknown");
+    const found = mod.status === "found";
+    const cat   = (mod.category && mod.category.name) ? ` · ${mod.category.name}` : "";
+
+    const item  = document.createElement("div");
     item.className = "module-item";
 
     const header = document.createElement("div");
     header.className = "module-header";
     header.innerHTML = `
-      <span class="module-name">${escHtml(name)}</span>
+      <div>
+        <span class="module-name">${escHtml(name)}</span>
+        <span style="font-size:.73rem;color:var(--text-muted);margin-left:.45rem">${escHtml(cat)}</span>
+      </div>
       <span class="module-indicator ${found ? "found" : "empty"}">${found ? "FOUND" : "NOT FOUND"}</span>`;
 
     const body = document.createElement("div");
     body.className = "module-body";
 
-    // Pretty print only the non-meta fields
-    const display = {};
-    for (const [k, v] of Object.entries(mod)) {
-      if (!["name", "found"].includes(k)) display[k] = v;
+    if (found) {
+      const details = extractSpecDetails(mod);
+      if (details.length) {
+        const rows = details.map(d =>
+          `<div style="display:flex;justify-content:space-between;align-items:center;
+                       padding:5px 0;border-bottom:1px solid var(--border)">
+             <span style="color:var(--text-dim);font-size:.79rem">${escHtml(d.key)}</span>
+             <span style="color:var(--text);font-size:.82rem;font-weight:600;
+                          max-width:60%;word-break:break-all;text-align:right">
+               ${escHtml(String(d.value))}
+             </span>
+           </div>`
+        ).join("");
+        body.innerHTML = `<div style="padding:.15rem 0">${rows}</div>`;
+      } else {
+        body.innerHTML = `<pre>${escHtml(JSON.stringify(mod.spec_format, null, 2))}</pre>`;
+      }
+    } else {
+      body.style.display = "none";
     }
-    body.innerHTML = `<pre>${escHtml(JSON.stringify(display, null, 2))}</pre>`;
 
-    // Collapsible
     header.addEventListener("click", () => {
-      const visible = body.style.display !== "none" && body.style.display !== "";
-      body.style.display = visible ? "none" : "block";
+      body.style.display = (body.style.display === "none") ? "block" : "none";
     });
-    // Start collapsed if not found
-    if (!found) body.style.display = "none";
 
     item.appendChild(header);
     item.appendChild(body);
