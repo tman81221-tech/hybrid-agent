@@ -48,7 +48,7 @@ def load_config() -> dict:
     cfg = {
         "api_key":  "",
         "base_url": "https://api.osint.industries/v2/request",
-        "auth_header": "apikey",   # apikey | Bearer | X-API-Key
+        "auth_header": "api-key",   # api-key | Bearer | X-API-Key
     }
     if CONFIG_FILE.exists():
         try:
@@ -89,7 +89,7 @@ class OSINTClient:
     MAX_RETRIES = 4
     RETRY_CODES = {429, 500, 502, 503, 504}
 
-    def __init__(self, api_key: str, base_url: str, auth_header: str = "apikey"):
+    def __init__(self, api_key: str, base_url: str, auth_header: str = "api-key"):
         self.api_key     = api_key
         self.base_url    = base_url
         self.auth_header = auth_header
@@ -109,8 +109,8 @@ class OSINTClient:
             self.session.headers["Authorization"] = f"Bearer {self.api_key}"
         elif style == "x-api-key":
             self.session.headers["X-API-Key"] = self.api_key
-        else:  # default: apikey (OSINT Industries standard)
-            self.session.headers["apikey"] = self.api_key
+        else:  # default: api-key (OSINT Industries standard header name)
+            self.session.headers["api-key"] = self.api_key
 
     def search(self, query: str, query_type: str, timeout: int = 60) -> dict:
         """
@@ -321,7 +321,7 @@ def index():
         "index.html",
         has_key=bool(cfg.get("api_key")),
         base_url=cfg.get("base_url", ""),
-        auth_header=cfg.get("auth_header", "apikey"),
+        auth_header=cfg.get("auth_header", "api-key"),
         model=_best_model() or "none",
     )
 
@@ -333,7 +333,7 @@ def api_config():
         body = request.get_json(silent=True) or {}
         api_key     = body.get("api_key", "").strip()
         base_url    = body.get("base_url", "https://api.osint.industries/v2/request").strip()
-        auth_header = body.get("auth_header", "apikey").strip()
+        auth_header = body.get("auth_header", "api-key").strip()
         if not api_key:
             return jsonify({"success": False, "error": "API key is required."}), 400
         if not base_url.startswith("http"):
@@ -347,7 +347,7 @@ def api_config():
         "has_key":      bool(key),
         "key_preview":  ("●" * 16 + key[-4:]) if len(key) >= 4 else ("●" * len(key)),
         "base_url":     cfg.get("base_url", ""),
-        "auth_header":  cfg.get("auth_header", "apikey"),
+        "auth_header":  cfg.get("auth_header", "api-key"),
         "model":        _best_model() or "none",
     })
 
@@ -371,7 +371,7 @@ def api_search():
     client = OSINTClient(
         api_key=cfg["api_key"],
         base_url=cfg["base_url"],
-        auth_header=cfg.get("auth_header", "apikey"),
+        auth_header=cfg.get("auth_header", "api-key"),
     )
 
     result = client.search(query, query_type)

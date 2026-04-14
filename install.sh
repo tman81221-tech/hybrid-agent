@@ -121,14 +121,14 @@ sys.exit(0 if d.get('api_key','').strip() else 1)
 
   echo ""
   echo "  نمط إرسال الـ API Key:"
-  echo "    1) apikey               ← الافتراضي (OSINT Industries)"
+  echo "    1) api-key               ← الافتراضي (OSINT Industries)"
   echo "    2) Authorization: Bearer"
   echo "    3) X-API-Key"
   read -rp "  اختر [1]: " AUTH_CHOICE
   case "${AUTH_CHOICE:-1}" in
     2) AUTH_HEADER="Bearer"    ;;
     3) AUTH_HEADER="X-API-Key" ;;
-    *) AUTH_HEADER="apikey"    ;;
+    *) AUTH_HEADER="api-key"    ;;
   esac
 
   # كتابة JSON بأمان (لا مشاكل من رموز خاصة في API key)

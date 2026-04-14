@@ -95,14 +95,14 @@ if [[ ! -f "$CONFIG" ]]; then
   BASE_URL="${BASE_URL:-https://api.osint.industries/v2/request}"
 
   echo "  Auth header style:"
-  echo "    1) apikey           (default – OSINT Industries standard)"
+  echo "    1) api-key           (default – OSINT Industries standard)"
   echo "    2) Authorization: Bearer"
   echo "    3) X-API-Key"
   read -rp "  Choice [1]: " AUTH_CHOICE
   case "${AUTH_CHOICE:-1}" in
     2) AUTH_HEADER="Bearer"    ;;
     3) AUTH_HEADER="X-API-Key" ;;
-    *) AUTH_HEADER="apikey"    ;;
+    *) AUTH_HEADER="api-key"    ;;
   esac
 
   python3 - <<PYEOF
