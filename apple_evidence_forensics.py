@@ -20,17 +20,24 @@ def parse_args():
         dest="max_rows",
         help="الحد الأقصى لعدد الصفوف المعروضة من كل ملف CSV (الافتراضي: 500)",
     )
+    parser.add_argument(
+        "--output",
+        default=None,
+        help="مجلد حفظ التقرير (الافتراضي: نفس مجلد الأدلة)",
+    )
     return parser.parse_args()
 
 
-def run_autonomous_forensics(base_path, max_csv_rows):
+def run_autonomous_forensics(base_path, max_csv_rows, output_dir=None):
     all_findings = []
     error_logs = []
     processed = 0
 
     run_ts = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    out_dir = output_dir if output_dir else base_path
+    os.makedirs(out_dir, exist_ok=True)
     report_output = os.path.join(
-        base_path,
+        out_dir,
         f"FINAL_EVIDENCE_REPORT_{datetime.now().strftime('%Y%m%d_%H%M')}.txt"
     )
 
@@ -92,4 +99,4 @@ def run_autonomous_forensics(base_path, max_csv_rows):
 
 if __name__ == "__main__":
     args = parse_args()
-    run_autonomous_forensics(args.path, args.max_rows)
+    run_autonomous_forensics(args.path, args.max_rows, args.output)
