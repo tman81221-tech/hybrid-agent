@@ -43,11 +43,13 @@ def run_autonomous_forensics(base_path, max_csv_rows, output_dir=None):
 
     target_files = (
         glob.glob(os.path.join(base_path, "*.csv")) +
-        glob.glob(os.path.join(base_path, "*.json"))
+        glob.glob(os.path.join(base_path, "*.json")) +
+        glob.glob(os.path.join(base_path, "*.txt")) +
+        glob.glob(os.path.join(base_path, "*.md"))
     )
 
     if not target_files:
-        print("[!] لم يتم العثور على أي ملفات CSV أو JSON في المسار المحدد.")
+        print("[!] لم يتم العثور على أي ملفات CSV أو JSON أو TXT أو MD في المسار المحدد.")
         return
 
     print(f"[!] جاري فحص {len(target_files)} ملفاً...")
@@ -74,6 +76,12 @@ def run_autonomous_forensics(base_path, max_csv_rows, output_dir=None):
                     data = json.load(f)
                 all_findings.append(f"\n{'='*20}\nMETADATA: {file_name}\n{'='*20}")
                 all_findings.append(json.dumps(data, indent=2, ensure_ascii=False))
+
+            elif file.endswith('.txt') or file.endswith('.md'):
+                with open(file, 'r', encoding='utf-8', errors='replace') as f:
+                    content = f.read()
+                all_findings.append(f"\n{'='*20}\nFILE: {file_name}\n{'='*20}")
+                all_findings.append(content)
 
             processed += 1
 
